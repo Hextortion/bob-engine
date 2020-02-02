@@ -134,9 +134,14 @@ void Camera::updateTranslationRotation(int xpos, int ypos)
     worldToCamera = cameraToWorld.quickInverse();
 }
 
-float edgeFunction(const Vec3<float>& a, const Vec3<float>& b, const Vec3<float>& c)
+// float edgeFunction(const Vec3<float>& a, const Vec3<float>& b, const Vec3<float>& c)
+// {
+//     return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0]);
+// }
+
+float edgeFunction(const Vec3<float>& v0, const Vec3<float>& v1, const Vec3<float>& p)
 {
-    return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0]);
+    return (v1.y - v0.y) * (p.x - v0.x) - (v1.x - v0.x) * (p.y - v0.y);
 }
 
 optional<BoundingBox<int>>
@@ -331,6 +336,7 @@ void Engine::drawTriangleWireframe(
 void Engine::drawTriangle(Triangle tri, bool clipped)
 {
     float lightFactor = max(0.0f, lightSource.dot(tri.normal));
+    uint8_t luminance = static_cast<uint8_t>(floor(lightFactor * 256.0f));
 
     tri = Triangle {
         worldToRasterSpace(tri.v[0], camera, width, height),
@@ -338,33 +344,55 @@ void Engine::drawTriangle(Triangle tri, bool clipped)
         worldToRasterSpace(tri.v[2], camera, width, height),
     };
 
-    tri.v[0].z = 1 / tri.v[0].z;
-    tri.v[1].z = 1 / tri.v[1].z;
-    tri.v[2].z = 1 / tri.v[2].z;
-
     auto boundingBox = imageIntersection(tri.getBoundingBox(), width, height);
 
     if (boundingBox) {
+        tri.v[0].z = 1 / tri.v[0].z;
+        tri.v[1].z = 1 / tri.v[1].z;
+        tri.v[2].z = 1 / tri.v[2].z;
+
+        float A01 = tri.v[1].y - tri.v[0].y;
+        float A12 = tri.v[2].y - tri.v[1].y;
+        float A20 = tri.v[0].y - tri.v[2].y;
+
+        float B01 = tri.v[0].x - tri.v[1].x;
+        float B12 = tri.v[1].x - tri.v[2].x;
+        float B20 = tri.v[2].x - tri.v[0].x;
+
+        Vec3<float> centerPixel(boundingBox->xmin + 0.5, boundingBox->ymin + 0.5, 0);
+        float w0Row = edgeFunction(tri.v[1], tri.v[2], centerPixel);
+        float w1Row = edgeFunction(tri.v[2], tri.v[0], centerPixel);
+        float w2Row = edgeFunction(tri.v[0], tri.v[1], centerPixel);
         float area = edgeFunction(tri.v[0], tri.v[1], tri.v[2]);
 
         for (int y = boundingBox->ymin; y <= boundingBox->ymax; ++y) {
+            float w0 = w0Row;
+            float w1 = w1Row;
+            float w2 = w2Row;
+
             for (int x = boundingBox->xmin; x <= boundingBox->xmax; ++x) {
-                Vec3<float> centerPixel{x + 0.5f, y + 0.5f, 0};
-                float w0 = edgeFunction(tri.v[1], tri.v[2], centerPixel);
-                float w1 = edgeFunction(tri.v[2], tri.v[0], centerPixel);
-                float w2 = edgeFunction(tri.v[0], tri.v[1], centerPixel);
+                // float w0 = edgeFunction(tri.v[1], tri.v[2], centerPixel);
+                // float w1 = edgeFunction(tri.v[2], tri.v[0], centerPixel);
+                // float w2 = edgeFunction(tri.v[0], tri.v[1], centerPixel);
 
                 if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-                    w0 /= area; w1 /= area; w2 /= area;
-                    float z = 1.0 / (tri.v[2].z * w0 + tri.v[1].z * w1 + tri.v[0].z * w2);
+                    // w0 /= area; w1 /= area; w2 /= area;
+                    float z = area / (tri.v[2].z * w0 + tri.v[1].z * w1 + tri.v[0].z * w2);
 
                     if (z < depthBuffer[y * width + x]) {
                         depthBuffer[y * width + x] = z;
-                        uint8_t luminance = static_cast<uint8_t>(floor(lightFactor * 256.0f));
                         mem[y * width + x] = (luminance << 16) | (luminance << 8) | luminance;
                     }
                 }
+
+                w0 += A12;
+                w1 += A20;
+                w2 += A01;
             }
+
+            w0Row += B12;
+            w1Row += B20;
+            w2Row += B01;
         }
 
         if (wireframe) {
