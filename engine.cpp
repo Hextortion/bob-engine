@@ -13,7 +13,7 @@ using namespace std;
 
 const double gPi = 3.14159265358979323846;
 
-BoundingBox<float> Triangle::getBoundingBox() const
+Box<float> Triangle::getBoundingBox() const
 {
     return { min(v[0].x, min(v[1].x, v[2].x)), max(v[0].x, max(v[1].x, v[2].x)),
              min(v[0].y, min(v[1].y, v[2].y)), max(v[0].y, max(v[1].y, v[2].y)) };
@@ -144,8 +144,8 @@ float edgeFunction(const Vec3<float>& v0, const Vec3<float>& v1, const Vec3<floa
     return (v1.y - v0.y) * (p.x - v0.x) - (v1.x - v0.x) * (p.y - v0.y);
 }
 
-optional<BoundingBox<int>>
-imageIntersection(BoundingBox<float> box, int width, int height)
+optional<Box<int>>
+imageIntersection(Box<float> box, int width, int height)
 {
     if (box.xmin >= width - 1 || box.xmax < 0 ||
         box.ymin >= height - 1 || box.ymax < 0)
@@ -153,7 +153,7 @@ imageIntersection(BoundingBox<float> box, int width, int height)
         return nullopt;
     }
 
-    return BoundingBox<int> {
+    return Box<int> {
         max(0, static_cast<int>(floor(box.xmin))),
         min(width - 1, static_cast<int>(floor(box.xmax))),
         max(0, static_cast<int>(floor(box.ymin))),
@@ -240,77 +240,109 @@ Engine::Engine(int width, int height, float fov) : width(width), height(height)
     depthBuffer = vector<float>(width * height, camera.far_);
 }
 
+using LineClipCode = int;
+
+const LineClipCode LINE_CLIP_INSIDE = 0;
+const LineClipCode LINE_CLIP_LEFT = 1;
+const LineClipCode LINE_CLIP_RIGHT = 2;
+const LineClipCode LINE_CLIP_BOTTOM = 4;
+const LineClipCode LINE_CLIP_TOP = 8;
+
+LineClipCode computeOutCode(const Box<int>& r, Vec2<int> p)
+{
+    LineClipCode code;
+
+    code = LINE_CLIP_INSIDE;
+
+    if (p.x < r.xmin) {
+        code |= LINE_CLIP_LEFT;
+    } else if (p.x > r.xmax) {
+        code |= LINE_CLIP_RIGHT;
+    }
+
+    if (p.y < r.ymin) {
+        code |= LINE_CLIP_BOTTOM;
+    } else if (p.y > r.ymax) {
+        code |= LINE_CLIP_TOP;
+    }
+
+    return code;
+}
+
+// Cohen–Sutherland clipping algorithm
+optional<Line2D<int>>
+clipLineAgainstRectangle(const Box<int>& r, Line2D<int> line)
+{
+    LineClipCode code0 = computeOutCode(r, line.start);
+    LineClipCode code1 = computeOutCode(r, line.end);
+
+    while (true) {
+        if (!(code0 | code1)) {
+            return line;
+        } else if (code0 & code1) {
+            return nullopt;
+        } else {
+            int x, y;
+            LineClipCode code = code0 ? code0 : code1;
+
+            if (code & LINE_CLIP_TOP) {
+                x = line.start.x + (line.end.x - line.start.x) * (r.ymax - line.start.y) / (line.end.y - line.start.y);
+                y = r.ymax;
+            } else if (code & LINE_CLIP_BOTTOM) {
+                x = line.start.x + (line.end.x - line.start.x) * (r.ymin - line.start.y) / (line.end.y - line.start.y);
+                y = r.ymin;
+            } else if (code & LINE_CLIP_RIGHT) {
+                y = line.start.y + (line.end.y - line.start.y) * (r.xmax - line.start.x) / (line.end.x - line.start.x);
+                x = r.xmax;
+            } else if (code & LINE_CLIP_LEFT) {
+                y = line.start.y + (line.end.y - line.start.y) * (r.xmin - line.start.x) / (line.end.x - line.start.x);
+                x = r.xmin;
+            }
+
+            if (code == code0) {
+                line.start.x = x;
+                line.start.y = y;
+                code0 = computeOutCode(r, line.start);
+            } else {
+                line.end.x = x;
+                line.end.y = y;
+                code1 = computeOutCode(r, line.end);
+            }
+        }
+    }
+}
+
 void Engine::drawLine(
-    int x0, int x1, int y0, int y1,
+    Line2D<int> line,
     uint8_t r, uint8_t g, uint8_t b)
 {
-    auto drawPixel = [=, this](int x, int y) {
-        if (y >= 0 && x >= 0 && y < height && x < width) {
-            mem[y * width + x] = (r << 16) | (g << 8) | b;
-        }
-    };
+    auto clipped = clipLineAgainstRectangle(Box<int>{0, width, 0, height}, line);
 
-    auto plotLineLow = [=](int x0, int y0, int x1, int y1) {
-        int dx = x1 - x0;
-        int dy = y1 - y0;
-        int yi = 1;
+     if (clipped) {
+        int dx = clipped->end.x - clipped->start.x;
+        int dy = clipped->end.y - clipped->start.y;
+        int dLong = abs(dx);
+        int dShort = abs(dy);
 
-        if (dy < 0) {
-            yi = -1;
-            dy = -dy;
-        }
+        int offsetLong = dx > 0 ? 1 : -1;
+        int offsetShort = dy > 0 ? width : -width;
 
-        int D = 2 * dy - dx;
-        int y = y0;
-
-        for (int x = x0; x <= x1; ++x) {
-            drawPixel(x, y);
-
-            if (D > 0) {
-                y += yi;
-                D -= 2 * dx;
-            }
-
-            D += 2 * dy;
-        }
-    };
-
-    auto plotLineHigh = [=](int x0, int y0, int x1, int y1) {
-        int dx = x1 - x0;
-        int dy = y1 - y0;
-        int xi = 1;
-
-        if (dx < 0) {
-            xi = -1;
-            dx = -dx;
+        if (dLong < dShort) {
+            swap(dShort, dLong);
+            swap(offsetShort, offsetLong);
         }
 
-        int D = 2 * dx - dy;
-        int x = x0;
+        int D = 2 * dShort - dLong;
+        int index = clipped->start.y * width + clipped->start.x;
+        const int offset[] = { offsetLong, offsetLong + offsetShort };
+        const int incD[] = { 2 * dShort, 2 * dShort - 2 * dLong };
 
-        for (int y = y0; y <= y1; ++y) {
-            drawPixel(x, y);
-
-            if (D > 0) {
-                x += xi;
-                D -= 2 * dy;
-            }
-
-            D += 2 * dx;
-        }
-    };
-
-    if (abs(y1 - y0) < abs(x1 - x0)) {
-        if (x0 > x1) {
-            plotLineLow(x1, y1, x0, y0);
-        } else {
-            plotLineLow(x0, y0, x1, y1);
-        }
-    } else {
-        if (y0 > y1) {
-            plotLineHigh(x1, y1, x0, y0);
-        } else {
-            plotLineHigh(x0, y0, x1, y1);
+        for (int i = 0; i <= dLong; i++)  {
+            if (index >= 0 && index < width * height)
+                mem[index] = (r << 16) | (g << 8) | b;
+            const int DGreaterThan0 = D > 0;
+            index += offset[DGreaterThan0];
+            D += incD[DGreaterThan0];
         }
     }
 }
@@ -328,9 +360,9 @@ void Engine::drawTriangleWireframe(
     y1 = round(tri.v[1].y);
     y2 = round(tri.v[2].y);
 
-    drawLine(x0, x1, y0, y1, r, g, b);
-    drawLine(x2, x1, y2, y1, r, g, b);
-    drawLine(x0, x2, y0, y2, r, g, b);
+    drawLine({{x0, y0}, {x1, y1}}, r, g, b);
+    drawLine({{x2, y2}, {x1, y1}}, r, g, b);
+    drawLine({{x0, y0}, {x2, y2}}, r, g, b);
 }
 
 void Engine::drawTriangle(Triangle tri, bool clipped)

@@ -10,6 +10,14 @@
 extern const double gPi;
 
 template <typename T>
+struct Vec2
+{
+    Vec2() : x(T(0)), y(T(0)) {}
+    Vec2(T x, T y) : x(T(x)), y(T(y)) {}
+    T x, y;
+};
+
+template <typename T>
 struct Vec3
 {
     Vec3() : x(T(0)), y(T(0)), z(T(0)) {}
@@ -127,10 +135,8 @@ struct Mat44
 
         for (int i = 0; i < 4; ++i) {
             for (int j = 0; j < 4; ++j) {
-                ret[i][j] = x[i][0] * other[0][j] +
-                            x[i][1] * other[1][j] +
-                            x[i][2] * other[2][j] +
-                            x[i][3] * other[3][j];
+                ret[i][j] = x[i][0] * other[0][j] + x[i][1] * other[1][j] +
+                            x[i][2] * other[2][j] + x[i][3] * other[3][j];
             }
         }
 
@@ -230,8 +236,13 @@ struct Mat44
 Mat44<float> rotationAboutAxis(Vec3<float> v, float theta);
 
 template <typename T>
-struct BoundingBox {
+struct Box {
     T xmin, xmax, ymin, ymax;
+};
+
+template <typename T>
+struct Line2D {
+    Vec2<T> start, end;
 };
 
 struct Triangle {
@@ -245,7 +256,7 @@ struct Triangle {
         normal = (v2 - v0).cross(v1 - v0).normalize();
     }
 
-    BoundingBox<float> getBoundingBox() const;
+    Box<float> getBoundingBox() const;
 };
 
 struct ClipResult {
@@ -296,7 +307,7 @@ struct Engine {
 
     void loadObj(const std::string& filename);
     void fillBuffer(uint8_t r, uint8_t g, uint8_t b);
-    void drawLine(int x1, int x2, int y1, int y2, uint8_t r, uint8_t g, uint8_t b);
+    void drawLine(Line2D<int>, uint8_t r, uint8_t g, uint8_t b);
     void render();
     void drawTriangleWireframe(Triangle& tri, uint8_t r, uint8_t g, uint8_t b);
     void drawTriangle(Triangle tri, bool clipped = false);
